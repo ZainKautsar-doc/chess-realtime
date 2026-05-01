@@ -1,0 +1,130 @@
+import express from 'express';
+import { createServer as createViteServer } from 'vite';
+import { createServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+import path from 'path';
+
+async function startServer() {
+  const app = express();
+  const server = createServer(app);
+  const PORT = 3000;
+
+  // Real-time Chat and Chess Logic Settings
+  let clients: { ws: WebSocket; role: string; id: number }[] = [];
+  let connectionCount = 0;
+  
+  // Game State
+  // Default start FEN
+  let currentFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+  const wss = new WebSocketServer({ server });
+
+  wss.on('connection', (ws) => {
+    connectionCount++;
+    const id = connectionCount;
+    
+    let role = 'Spectator';
+    // Count current active White/Black
+    const hasWhite = clients.some(c => c.role === 'White');
+    const hasBlack = clients.some(c => c.role === 'Black');
+
+    if (!hasWhite) {
+      role = 'White';
+    } else if (!hasBlack) {
+      role = 'Black';
+    }
+    
+    // Add to clients
+    clients.push({ ws, role, id });
+    
+    // Send initial state to the newly connected client
+    ws.send(JSON.stringify({
+      type: 'init',
+      role,
+      fen: currentFen
+    }));
+
+    // Broadcast system message
+    broadcast({
+      type: 'chat',
+      message: `A new user joined as ${role}.`,
+      sender: 'System',
+      role: 'System'
+    });
+
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message.toString());
+        
+        switch (data.type) {
+          case 'move':
+            // Only White or Black can move
+            if (role === 'White' || role === 'Black') {
+              currentFen = data.fen;
+              // Broadcast move to all
+              broadcast({
+                type: 'updateBoard',
+                fen: currentFen
+              });
+            }
+            break;
+            
+          case 'chat':
+            broadcast({
+              type: 'chat',
+              message: data.message,
+              sender: role,
+              role
+            });
+            break;
+        }
+      } catch (err) {
+        console.error('Failed to parse WS message', err);
+      }
+    });
+
+    ws.on('close', () => {
+      clients = clients.filter(c => c.ws !== ws);
+      broadcast({
+        type: 'chat',
+        message: `${role} has left the game.`,
+        sender: 'System',
+        role: 'System'
+      });
+      
+      // If White or Black leaves, we could reset the game or just leave it. 
+      // For this assignment, we leave the FEN as is so they can reconnect if needed.
+    });
+  });
+
+  function broadcast(data: any) {
+    const message = JSON.stringify(data);
+    clients.forEach((client) => {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(message);
+      }
+    });
+  }
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    // For Production / start script
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
