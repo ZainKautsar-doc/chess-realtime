@@ -10,9 +10,10 @@ interface ChatBoxProps {
   messages: ChatMessage[];
   onSendMessage: (msg: string) => void;
   myRole: string;
+  myDisplayName: string;
 }
 
-export default function ChatBox({ messages, onSendMessage, myRole }: ChatBoxProps) {
+export default function ChatBox({ messages, onSendMessage, myRole, myDisplayName }: ChatBoxProps) {
   const [input, setInput] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
 
@@ -42,7 +43,7 @@ export default function ChatBox({ messages, onSendMessage, myRole }: ChatBoxProp
       <div className="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
         <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Live Chat</h2>
         <span className={`text-xs ${getRoleColor(myRole)}`}>
-          You: {myRole}
+          You: {myDisplayName}
         </span>
       </div>
       
@@ -54,7 +55,7 @@ export default function ChatBox({ messages, onSendMessage, myRole }: ChatBoxProp
             ) : (
                <>
                  <span className={`${getRoleColor(msg.role)} font-bold mr-2`}>
-                   [{msg.role}] {msg.sender !== msg.role ? msg.sender : ''}
+                   [{msg.sender}]
                  </span>
                  <span className="text-slate-300">{msg.message}</span>
                </>

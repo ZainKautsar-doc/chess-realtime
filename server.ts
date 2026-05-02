@@ -10,8 +10,9 @@ async function startServer() {
   const PORT = 3000;
 
   // Real-time Chat and Chess Logic Settings
-  let clients: { ws: WebSocket; role: string; id: number }[] = [];
+  let clients: { ws: WebSocket; role: string; id: number; spectatorNumber: number | null }[] = [];
   let connectionCount = 0;
+  let spectatorCount = 0; // Total count of spectators ever joined
   
   // Game State
   // Default start FEN
@@ -24,6 +25,8 @@ async function startServer() {
     const id = connectionCount;
     
     let role = 'Spectator';
+    let spectatorNumber: number | null = null;
+
     // Count current active White/Black
     const hasWhite = clients.some(c => c.role === 'White');
     const hasBlack = clients.some(c => c.role === 'Black');
@@ -32,25 +35,34 @@ async function startServer() {
       role = 'White';
     } else if (!hasBlack) {
       role = 'Black';
+    } else {
+      spectatorCount++;
+      spectatorNumber = spectatorCount;
     }
     
     // Add to clients
-    clients.push({ ws, role, id });
+    clients.push({ ws, role, id, spectatorNumber });
     
     // Send initial state to the newly connected client
     ws.send(JSON.stringify({
       type: 'init',
       role,
-      fen: currentFen
+      spectatorNumber,
+      fen: currentFen,
+      spectators: getSpectatorList()
     }));
 
     // Broadcast system message
+    const displayName = role === 'Spectator' ? `Spectator ${spectatorNumber}` : role;
     broadcast({
       type: 'chat',
-      message: `A new user joined as ${role}.`,
+      message: `${displayName} joined the game.`,
       sender: 'System',
       role: 'System'
     });
+
+    // Notify everyone of updated spectator list
+    broadcastSpectatorUpdate();
 
     ws.on('message', (message) => {
       try {
@@ -64,7 +76,8 @@ async function startServer() {
               // Broadcast move to all
               broadcast({
                 type: 'updateBoard',
-                fen: currentFen
+                fen: currentFen,
+                lastMove: data.move // Include move details for highlighting
               });
             }
             break;
@@ -73,8 +86,9 @@ async function startServer() {
             broadcast({
               type: 'chat',
               message: data.message,
-              sender: role,
-              role
+              sender: role === 'Spectator' ? `Spectator ${spectatorNumber}` : role,
+              role,
+              spectatorNumber
             });
             break;
         }
@@ -85,17 +99,31 @@ async function startServer() {
 
     ws.on('close', () => {
       clients = clients.filter(c => c.ws !== ws);
+      const displayName = role === 'Spectator' ? `Spectator ${spectatorNumber}` : role;
       broadcast({
         type: 'chat',
-        message: `${role} has left the game.`,
+        message: `${displayName} has left the game.`,
         sender: 'System',
         role: 'System'
       });
       
-      // If White or Black leaves, we could reset the game or just leave it. 
-      // For this assignment, we leave the FEN as is so they can reconnect if needed.
+      broadcastSpectatorUpdate();
     });
   });
+
+  function getSpectatorList() {
+    return clients
+      .filter(c => c.role === 'Spectator')
+      .map(c => `Spectator ${c.spectatorNumber}`)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+
+  function broadcastSpectatorUpdate() {
+    broadcast({
+      type: 'spectatorUpdate',
+      spectators: getSpectatorList()
+    });
+  }
 
   function broadcast(data: any) {
     const message = JSON.stringify(data);

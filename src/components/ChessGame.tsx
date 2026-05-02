@@ -12,21 +12,15 @@ interface ChatMessage {
 export default function ChessGame() {
   const [game, setGame] = useState(new Chess());
   const [role, setRole] = useState<string>('Spectator');
+  const [spectatorNumber, setSpectatorNumber] = useState<number | null>(null);
+  const [spectators, setSpectators] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [moveSquares, setMoveSquares] = useState<any>({});
+  const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    // Connect to WebSocket server on port 3000
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
-    // We assume the game is hosted on port 3000 locally or injected by platform via same hostname
-    const port = window.location.port ? `:${window.location.port}` : ':3000'; // Defaulting to 3000 for local proxy or direct access
-    const wsUrl = `${protocol}//${host}${port}`;
-    
-    // Sometimes window.location.port is empty in prod, meaning 80/443. 
-    // In our Dev environment it will hit the Vite proxy / Nginx which proxies WS seamlessly.
-    // In many hosted setups, standard wss://domain.com/ works if standard HTTP proxies it.
-    // Let's use standard URL logic:
     const wsUrlResolved = `${protocol}//${window.location.host}`;
     
     const ws = new WebSocket(wsUrlResolved);
@@ -39,19 +33,31 @@ export default function ChessGame() {
         switch (data.type) {
           case 'init':
             setRole(data.role);
+            setSpectatorNumber(data.spectatorNumber);
+            if (data.spectators) setSpectators(data.spectators);
             if (data.fen) {
-              const newGame = new Chess(data.fen);
-              setGame(newGame);
+              setGame(new Chess(data.fen));
             }
             break;
             
           case 'updateBoard':
             if (data.fen) {
-              const newGame = new Chess(data.fen);
-              setGame(newGame);
+              setGame(new Chess(data.fen));
+              if (data.lastMove) {
+                setMoveSquares({
+                  [data.lastMove.from]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+                  [data.lastMove.to]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+                });
+              }
             }
             break;
             
+          case 'spectatorUpdate':
+            if (data.spectators) {
+              setSpectators(data.spectators);
+            }
+            break;
+
           case 'chat':
             setMessages((prev) => [...prev, {
               message: data.message,
@@ -71,17 +77,17 @@ export default function ChessGame() {
   }, []);
 
   function makeAMove(move: any) {
-    // Only White and Black can move
     if (role !== 'White' && role !== 'Black') {
-      return false; // Spectators cannot move
+      showError("Spectators cannot move pieces.");
+      return false;
     }
 
     try {
       const gameCopy = new Chess(game.fen());
       
-      // Ensure it's the correct player's turn
-      const turn = gameCopy.turn(); // 'w' or 'b'
+      const turn = gameCopy.turn();
       if ((role === 'White' && turn !== 'w') || (role === 'Black' && turn !== 'b')) {
+        showError("It's not your turn.");
         return false;
       }
 
@@ -89,27 +95,39 @@ export default function ChessGame() {
 
       if (result) {
         setGame(gameCopy);
+        setMoveSquares({
+          [move.from]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+          [move.to]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
+        });
         
-        // Broadcast new FEN
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({
             type: 'move',
-            fen: gameCopy.fen()
+            fen: gameCopy.fen(),
+            move: { from: move.from, to: move.to }
           }));
         }
         return true;
+      } else {
+        showError("Invalid move.");
+        return false;
       }
     } catch (e) {
+      showError("Invalid move.");
       return false;
     }
-    return false;
+  }
+
+  function showError(msg: string) {
+    setError(msg);
+    setTimeout(() => setError(null), 3000);
   }
 
   function onDrop(sourceSquare: string, targetSquare: string, piece: string) {
     const move = makeAMove({
       from: sourceSquare,
       to: targetSquare,
-      promotion: piece[1].toLowerCase() ?? 'q',
+      promotion: piece[1]?.toLowerCase() ?? 'q',
     });
     return move;
   }
@@ -132,30 +150,51 @@ export default function ChessGame() {
     return isMyTurn ? "Your Turn" : "Opponent's Turn";
   };
 
+  const myDisplayName = role === 'Spectator' ? `Spectator ${spectatorNumber}` : role;
+
   return (
-    <div className="flex justify-center gap-8 w-full max-w-[1024px] p-4 lg:p-10">
+    <div className="flex flex-col lg:flex-row justify-center gap-8 w-full max-w-[1024px] p-4 lg:p-10">
       {/* Chess Board Area */}
       <div className="flex flex-col gap-6 w-full lg:w-[560px]">
-        {/* Opponent Info panel if desired, or Top status (Glassmorphism) */}
-        <div className="flex items-center justify-between glass rounded-xl px-6 py-3">
-          <div>
-             <p className="text-sm text-slate-400 leading-none">Game Status</p>
-             <h2 className="text-lg font-semibold text-white mt-1">
-               {getStatusText()}
-             </h2>
+        {/* Top Panel: Game Status & Spectators */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between glass rounded-xl px-6 py-3 relative overflow-hidden">
+            {error && (
+              <div className="absolute inset-0 bg-red-500/90 flex items-center justify-center text-white font-bold text-sm z-10 animate-pulse">
+                {error}
+              </div>
+            )}
+            <div>
+               <p className="text-sm text-slate-400 leading-none">Game Status</p>
+               <h2 className="text-lg font-semibold text-white mt-1">
+                 {getStatusText()}
+               </h2>
+            </div>
+            
+            <div className="text-right">
+               <p className="text-sm text-slate-400 mb-1">Current Turn</p>
+               <div className={`text-xs font-semibold uppercase ${game.turn() === 'w' ? 'text-green-400' : 'text-slate-400'}`}>
+                 {game.turn() === 'w' ? 'WHITE TURN' : 'BLACK TURN'}
+               </div>
+            </div>
           </div>
-          
-          <div className="text-right">
-             <p className="text-sm text-slate-400 mb-1">Current Turn</p>
-             <div className={`text-xs font-semibold uppercase ${game.turn() === 'w' ? 'text-green-400 turn-indicator' : 'text-slate-400 pl-6'}`}>
-               {game.turn() === 'w' ? 'WHITE TURN' : 'BLACK TURN'}
-             </div>
-          </div>
+
+          {spectators.length > 0 && (
+            <div className="glass rounded-xl px-6 py-2 text-xs text-slate-300 flex items-center gap-2">
+              <span className="text-slate-500">👁️ Spectators:</span>
+              <div className="flex flex-wrap gap-x-2">
+                {spectators.map((s, idx) => (
+                  <span key={s} className="font-medium text-slate-200">
+                    {s}{idx < spectators.length - 1 ? ',' : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Board Container */}
         <div className="rounded shadow-2xl shadow-black border-4 border-[#1a1a1a]">
-           {/* Disable pointer events if not your turn or if spectator to prevent visual drag */}
           <div className={`${(role === 'Spectator' || ((role === 'White' && game.turn() === 'b') || (role === 'Black' && game.turn() === 'w'))) ? 'pointer-events-none' : ''}`}>
             <Chessboard
               position={game.fen()}
@@ -164,6 +203,8 @@ export default function ChessGame() {
               customDarkSquareStyle={{ backgroundColor: '#475569' }}
               customLightSquareStyle={{ backgroundColor: '#e2e8f0' }}
               customDropSquareStyle={{ boxShadow: 'inset 0 0 1px 6px rgba(0,0,0,0.3)' }}
+              customSquareStyles={moveSquares}
+              animationDuration={300}
             />
           </div>
         </div>
@@ -180,7 +221,7 @@ export default function ChessGame() {
              </div>
              <div>
                <p className="text-sm text-slate-400 leading-none">You</p>
-               <p className="text-lg font-semibold text-white">{role}</p>
+               <p className="text-lg font-semibold text-white">{myDisplayName}</p>
              </div>
           </div>
         </div>
@@ -193,6 +234,7 @@ export default function ChessGame() {
             messages={messages} 
             onSendMessage={handleSendMessage}
             myRole={role}
+            myDisplayName={myDisplayName}
           />
         </div>
       </div>
