@@ -16,6 +16,8 @@ export default function ChessGame() {
   const [spectators, setSpectators] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [moveSquares, setMoveSquares] = useState<any>({});
+  const [optionSquares, setOptionSquares] = useState<any>({});
+  const [moveFrom, setMoveFrom] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -43,6 +45,8 @@ export default function ChessGame() {
           case 'updateBoard':
             if (data.fen) {
               setGame(new Chess(data.fen));
+              setMoveFrom(null);
+              setOptionSquares({});
               if (data.lastMove) {
                 setMoveSquares({
                   [data.lastMove.from]: { backgroundColor: 'rgba(255, 255, 0, 0.4)' },
@@ -124,12 +128,89 @@ export default function ChessGame() {
   }
 
   function onDrop(sourceSquare: string, targetSquare: string, piece: string) {
+    // Keep onDrop but it will be disabled by arePiecesDraggable={false}
+    // unless the user decides to keep both. The request said "bukan dengan dihold"
+    // so we'll disable dragging in the component props.
     const move = makeAMove({
       from: sourceSquare,
       to: targetSquare,
       promotion: piece[1]?.toLowerCase() ?? 'q',
     });
     return move;
+  }
+
+  function getMoveOptions(square: string) {
+    const moves = game.moves({
+      square: square as any,
+      verbose: true,
+    });
+    if (moves.length === 0) {
+      return false;
+    }
+
+    const newSquares: any = {};
+    moves.map((move) => {
+      newSquares[move.to] = {
+        background:
+          game.get(move.to as any) && game.get(move.to as any).color !== game.get(square as any).color
+            ? 'radial-gradient(circle, rgba(0,0,0,.1) 85%, transparent 85%)'
+            : 'radial-gradient(circle, rgba(0,0,0,.1) 20%, transparent 20%)',
+        borderRadius: '50%',
+      };
+      return move;
+    });
+    newSquares[square] = {
+      background: 'rgba(255, 255, 0, 0.4)',
+    };
+    setOptionSquares(newSquares);
+    return true;
+  }
+
+  function onSquareClick(square: string) {
+    if (role !== 'White' && role !== 'Black') {
+      showError("Spectators cannot move pieces.");
+      return;
+    }
+
+    const turn = game.turn();
+    if ((role === 'White' && turn !== 'w') || (role === 'Black' && turn !== 'b')) {
+      showError("It's not your turn.");
+      return;
+    }
+
+    // if no moveFrom, check if we can select
+    if (!moveFrom) {
+      const hasMoveOptions = getMoveOptions(square);
+      if (hasMoveOptions) setMoveFrom(square);
+      return;
+    }
+
+    // if moveFrom, try to move
+    const move = makeAMove({
+      from: moveFrom,
+      to: square,
+      promotion: 'q', // always promote to queen for simplicity
+    });
+
+    if (move) {
+      setMoveFrom(null);
+      setOptionSquares({});
+    } else {
+      // If move failed, check if we're clicking another of our own pieces to change selection
+      const piece = game.get(square as any);
+      if (piece && ((role === 'White' && piece.color === 'w') || (role === 'Black' && piece.color === 'b'))) {
+        const hasMoveOptions = getMoveOptions(square);
+        if (hasMoveOptions) {
+          setMoveFrom(square);
+        } else {
+          setMoveFrom(null);
+          setOptionSquares({});
+        }
+      } else {
+        setMoveFrom(null);
+        setOptionSquares({});
+      }
+    }
   }
 
   const handleSendMessage = (msg: string) => {
@@ -195,18 +276,27 @@ export default function ChessGame() {
 
         {/* Board Container */}
         <div className="rounded shadow-2xl shadow-black border-4 border-[#1a1a1a]">
-          <div className={`${(role === 'Spectator' || ((role === 'White' && game.turn() === 'b') || (role === 'Black' && game.turn() === 'w'))) ? 'pointer-events-none' : ''}`}>
-            <Chessboard
-              position={game.fen()}
-              onPieceDrop={onDrop}
-              boardOrientation={role === 'Black' ? 'black' : 'white'}
-              customDarkSquareStyle={{ backgroundColor: '#475569' }}
-              customLightSquareStyle={{ backgroundColor: '#e2e8f0' }}
-              customDropSquareStyle={{ boxShadow: 'inset 0 0 1px 6px rgba(0,0,0,0.3)' }}
-              customSquareStyles={moveSquares}
-              animationDuration={300}
-            />
-          </div>
+          <Chessboard
+            options={{
+              position: game.fen(),
+              onPieceDrop: ({ sourceSquare, targetSquare, piece }) => {
+                return onDrop(sourceSquare, targetSquare ?? '', piece.pieceType);
+              },
+              onSquareClick: ({ square }) => {
+                onSquareClick(square);
+              },
+              allowDragging: false,
+              boardOrientation: (role === 'Black' ? 'black' : 'white') as 'black' | 'white',
+              darkSquareStyle: { backgroundColor: '#475569' },
+              lightSquareStyle: { backgroundColor: '#e2e8f0' },
+              dropSquareStyle: { boxShadow: 'inset 0 0 1px 6px rgba(0,0,0,0.3)' },
+              squareStyles: {
+                ...moveSquares,
+                ...optionSquares,
+              },
+              animationDurationInMs: 300,
+            }}
+          />
         </div>
         
         {/* Player Info panel */}
