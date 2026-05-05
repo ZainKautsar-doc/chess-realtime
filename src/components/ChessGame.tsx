@@ -19,7 +19,48 @@ export default function ChessGame() {
   const [optionSquares, setOptionSquares] = useState<any>({});
   const [moveFrom, setMoveFrom] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gameOverMsg, setGameOverMsg] = useState<string | null>(null);
+  const [drawOfferFrom, setDrawOfferFrom] = useState<string | null>(null);
+  const [showResignConfirm, setShowResignConfirm] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const PIECE_ICONS: Record<string, string> = {
+    p: '♟',
+    n: '♞',
+    b: '♝',
+    r: '♜',
+    q: '♛',
+    k: '♚',
+  };
+
+  const captured = (() => {
+    const board = game.board();
+    const wCounts = { p: 0, n: 0, b: 0, r: 0, q: 0 };
+    const bCounts = { p: 0, n: 0, b: 0, r: 0, q: 0 };
+    
+    board.forEach(row => {
+      row.forEach(piece => {
+        if (piece) {
+          if (piece.color === 'w') wCounts[piece.type as keyof typeof wCounts]++;
+          else bCounts[piece.type as keyof typeof bCounts]++;
+        }
+      });
+    });
+
+    const init = { p: 8, n: 2, b: 2, r: 2, q: 1 };
+    const caps = { w: [] as string[], b: [] as string[] };
+    
+    for (const t of ['q', 'r', 'b', 'n', 'p']) {
+      const type = t as keyof typeof init;
+      const wMiss = init[type] - wCounts[type];
+      for (let i = 0; i < wMiss; i++) caps.w.push(type);
+      
+      const bMiss = init[type] - bCounts[type];
+      for (let i = 0; i < bMiss; i++) caps.b.push(type);
+    }
+    
+    return caps;
+  })();
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -40,6 +81,8 @@ export default function ChessGame() {
             if (data.fen) {
               setGame(new Chess(data.fen));
             }
+            setGameOverMsg(null);
+            setDrawOfferFrom(null);
             break;
             
           case 'updateBoard':
@@ -69,6 +112,29 @@ export default function ChessGame() {
               role: data.role
             }]);
             break;
+
+          case 'drawOffer':
+            if (data.sender !== role && role !== 'Spectator') {
+              setDrawOfferFrom(data.sender);
+            }
+            break;
+
+          case 'drawAccept':
+            setGameOverMsg('Game ended in a draw.');
+            setDrawOfferFrom(null);
+            break;
+
+          case 'drawReject':
+            if (data.sender !== role && role !== 'Spectator') {
+              showError(`${data.sender} declined the draw.`);
+            }
+            setDrawOfferFrom(null);
+            break;
+
+          case 'resign':
+            const winner = data.sender === 'White' ? 'Black' : 'White';
+            setGameOverMsg(`${data.sender} resigned. ${winner} wins!`);
+            break;
         }
       } catch (err) {
         console.error('Failed to parse incoming message', err);
@@ -81,6 +147,7 @@ export default function ChessGame() {
   }, []);
 
   function makeAMove(move: any) {
+    if (gameOverMsg) return false;
     if (role !== 'White' && role !== 'Black') {
       showError("Spectators cannot move pieces.");
       return false;
@@ -167,6 +234,7 @@ export default function ChessGame() {
   }
 
   function onSquareClick(square: string) {
+    if (gameOverMsg) return;
     if (role !== 'White' && role !== 'Black') {
       showError("Spectators cannot move pieces.");
       return;
@@ -223,6 +291,7 @@ export default function ChessGame() {
   };
 
   const getStatusText = () => {
+    if (gameOverMsg) return gameOverMsg;
     if (game.isCheckmate()) return "Checkmate!";
     if (game.isDraw()) return "Draw";
     if (role === 'Spectator') return `${game.turn() === 'w' ? 'White' : 'Black'}'s Turn`;
@@ -272,10 +341,113 @@ export default function ChessGame() {
               </div>
             </div>
           )}
+
+          {(role === 'White' || role === 'Black') && !gameOverMsg && !game.isGameOver() && (
+            <div className="flex gap-3">
+              <button 
+                onClick={() => {
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({ type: 'drawOffer' }));
+                    showError("Draw offer sent.");
+                  }
+                }}
+                className="flex-1 glass bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-xl text-sm font-semibold transition-colors border-slate-600"
+              >
+                🤝 Offer Draw
+              </button>
+              <button 
+                onClick={() => setShowResignConfirm(true)}
+                className="flex-1 glass bg-red-900/30 hover:bg-red-800/40 text-red-300 py-2 rounded-xl text-sm font-semibold transition-colors border-red-900/50"
+              >
+                🏳️ Resign
+              </button>
+            </div>
+          )}
+
+          {drawOfferFrom && (
+            <div className="glass rounded-xl p-4 flex flex-col gap-3 border-yellow-500/30 bg-yellow-500/10 shadow-lg">
+              <p className="text-sm font-medium text-yellow-100 text-center">🤝 {drawOfferFrom} offered a draw.</p>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    wsRef.current?.send(JSON.stringify({ type: 'drawAccept' }));
+                    setDrawOfferFrom(null);
+                  }}
+                  className="flex-1 bg-green-600/80 hover:bg-green-500/80 text-white py-1.5 rounded-lg text-sm font-semibold border border-green-500"
+                >
+                  Accept
+                </button>
+                <button 
+                  onClick={() => {
+                    wsRef.current?.send(JSON.stringify({ type: 'drawReject' }));
+                    setDrawOfferFrom(null);
+                  }}
+                  className="flex-1 bg-slate-700/80 hover:bg-slate-600/80 text-white py-1.5 rounded-lg text-sm font-semibold border border-slate-600"
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Opponent Info */}
+        <div className="flex items-center justify-between glass rounded-xl px-4 py-2">
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs
+                ${role === 'White' ? 'bg-slate-800 border-2 border-slate-600 text-white' : 
+                  'bg-slate-200 border-2 border-white text-slate-900'}
+            `}>
+              {role === 'White' ? 'B' : 'W'}
+            </div>
+            <div className="flex items-center gap-3">
+              <p className="text-sm font-medium text-slate-300">
+                {role === 'White' ? 'Black Player' : role === 'Black' ? 'White Player' : 'Black Player'}
+              </p>
+              <div className="flex gap-0.5">
+                {(role === 'White' || role === 'Spectator' ? captured.w : captured.b).map((p, i) => (
+                  <span 
+                    key={i} 
+                    className={`text-lg leading-none ${ (role === 'White' || role === 'Spectator') ? 'text-white' : 'text-slate-900'}`}
+                    style={{ filter: (role === 'White' || role === 'Spectator') ? 'drop-shadow(0 0 1px black)' : 'none' }}
+                  >
+                    {PIECE_ICONS[p]}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Board Container */}
-        <div className="rounded shadow-2xl shadow-black border-4 border-[#1a1a1a]">
+        <div className="relative rounded shadow-2xl shadow-black border-4 border-[#1a1a1a]">
+          {showResignConfirm && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded">
+              <div className="glass bg-slate-900/90 p-6 rounded-xl border border-slate-700 max-w-[80%] w-full mx-4 shadow-2xl flex flex-col items-center text-center">
+                <div className="text-4xl mb-3">🏳️</div>
+                <h3 className="text-xl font-bold text-white mb-2">Resign Game?</h3>
+                <p className="text-sm text-slate-300 mb-6">Are you sure you want to resign? You will immediately lose the game.</p>
+                <div className="flex gap-3 w-full">
+                  <button 
+                    onClick={() => setShowResignConfirm(false)}
+                    className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => {
+                      wsRef.current?.send(JSON.stringify({ type: 'resign' }));
+                      setShowResignConfirm(false);
+                    }}
+                    className="flex-1 bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg font-medium transition-colors shadow-lg shadow-red-900/20"
+                  >
+                    Yes, Resign
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          
           <Chessboard
             options={{
               position: game.fen(),
@@ -300,18 +472,33 @@ export default function ChessGame() {
         </div>
         
         {/* Player Info panel */}
-        <div className="flex items-center justify-between glass rounded-xl px-6 py-3">
-          <div className="flex items-center gap-4">
-             <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold
+        <div className="flex items-center justify-between glass rounded-xl px-4 py-2">
+          <div className="flex items-center gap-3">
+             <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs
                 ${role === 'White' ? 'bg-slate-200 border-2 border-white text-slate-900' : 
                   role === 'Black' ? 'bg-slate-800 border-2 border-slate-600 text-white' : 
-                  'bg-slate-600 border-2 border-slate-500 text-white'}
+                  'bg-slate-200 border-2 border-white text-slate-900'}
              `}>
-               {role === 'White' ? 'W' : role === 'Black' ? 'B' : 'S'}
+               {role === 'White' ? 'W' : role === 'Black' ? 'B' : 'W'}
              </div>
-             <div>
-               <p className="text-sm text-slate-400 leading-none">You</p>
-               <p className="text-lg font-semibold text-white">{myDisplayName}</p>
+             <div className="flex items-center gap-3">
+               <div>
+                 <p className="text-xs text-slate-500 leading-none mb-0.5">{role === 'Spectator' ? 'Player' : 'You'}</p>
+                 <p className="text-sm font-semibold text-white">
+                   {role === 'Spectator' ? 'White Player' : myDisplayName}
+                 </p>
+               </div>
+               <div className="flex gap-0.5">
+                {(role === 'White' || role === 'Spectator' ? captured.b : captured.w).map((p, i) => (
+                  <span 
+                    key={i} 
+                    className={`text-lg leading-none ${ (role === 'White' || role === 'Spectator') ? 'text-slate-900' : 'text-white'}`}
+                    style={{ filter: (role === 'White' || role === 'Spectator') ? 'none' : 'drop-shadow(0 0 1px black)' }}
+                  >
+                    {PIECE_ICONS[p]}
+                  </span>
+                ))}
+              </div>
              </div>
           </div>
         </div>

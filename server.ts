@@ -91,6 +91,43 @@ async function startServer() {
               spectatorNumber
             });
             break;
+
+          case 'drawOffer':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'drawOffer', sender: role });
+            }
+            break;
+
+          case 'drawAccept':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'drawAccept' });
+              broadcast({
+                type: 'chat',
+                message: 'Game ended in a draw by agreement.',
+                sender: 'System',
+                role: 'System'
+              });
+            }
+            break;
+
+          case 'drawReject':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'drawReject', sender: role });
+            }
+            break;
+
+          case 'resign':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'resign', sender: role });
+              const winner = role === 'White' ? 'Black' : 'White';
+              broadcast({
+                type: 'chat',
+                message: `${role} resigned. ${winner} wins!`,
+                sender: 'System',
+                role: 'System'
+              });
+            }
+            break;
         }
       } catch (err) {
         console.error('Failed to parse WS message', err);
