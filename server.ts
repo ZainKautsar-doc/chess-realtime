@@ -128,6 +128,34 @@ async function startServer() {
               });
             }
             break;
+
+          case 'restartOffer':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'restartOffer', sender: role });
+            }
+            break;
+
+          case 'restartAccept':
+            if (role === 'White' || role === 'Black') {
+              currentFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+              broadcast({
+                type: 'restartGame',
+                fen: currentFen
+              });
+              broadcast({
+                type: 'chat',
+                message: 'Game restarted by agreement.',
+                sender: 'System',
+                role: 'System'
+              });
+            }
+            break;
+
+          case 'restartReject':
+            if (role === 'White' || role === 'Black') {
+              broadcast({ type: 'restartReject', sender: role });
+            }
+            break;
         }
       } catch (err) {
         console.error('Failed to parse WS message', err);

@@ -22,6 +22,8 @@ export default function ChessGame() {
   const [gameOverMsg, setGameOverMsg] = useState<string | null>(null);
   const [drawOfferFrom, setDrawOfferFrom] = useState<string | null>(null);
   const [showResignConfirm, setShowResignConfirm] = useState(false);
+  const [restartOfferFrom, setRestartOfferFrom] = useState<string | null>(null);
+  const [waitingForRestart, setWaitingForRestart] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   const PIECE_ICONS: Record<string, string> = {
@@ -83,6 +85,11 @@ export default function ChessGame() {
             }
             setGameOverMsg(null);
             setDrawOfferFrom(null);
+            setRestartOfferFrom(null);
+            setWaitingForRestart(false);
+            setMoveFrom(null);
+            setOptionSquares({});
+            setMoveSquares({});
             break;
             
           case 'updateBoard':
@@ -135,6 +142,30 @@ export default function ChessGame() {
             const winner = data.sender === 'White' ? 'Black' : 'White';
             setGameOverMsg(`${data.sender} resigned. ${winner} wins!`);
             break;
+
+          case 'restartOffer':
+            if (data.sender !== role && role !== 'Spectator') {
+              setRestartOfferFrom(data.sender);
+            }
+            break;
+
+          case 'restartGame':
+            setGame(new Chess(data.fen));
+            setGameOverMsg(null);
+            setRestartOfferFrom(null);
+            setWaitingForRestart(false);
+            setMoveFrom(null);
+            setOptionSquares({});
+            setMoveSquares({});
+            break;
+
+          case 'restartReject':
+            if (data.sender !== role && role !== 'Spectator') {
+              showError(`${data.sender} declined the restart.`);
+            }
+            setRestartOfferFrom(null);
+            setWaitingForRestart(false);
+            break;
         }
       } catch (err) {
         console.error('Failed to parse incoming message', err);
@@ -147,7 +178,7 @@ export default function ChessGame() {
   }, []);
 
   function makeAMove(move: any) {
-    if (gameOverMsg) return false;
+    if (gameOverMsg || game.isGameOver()) return false;
     if (role !== 'White' && role !== 'Black') {
       showError("Spectators cannot move pieces.");
       return false;
@@ -234,7 +265,7 @@ export default function ChessGame() {
   }
 
   function onSquareClick(square: string) {
-    if (gameOverMsg) return;
+    if (gameOverMsg || game.isGameOver()) return;
     if (role !== 'White' && role !== 'Black') {
       showError("Spectators cannot move pieces.");
       return;
@@ -292,13 +323,27 @@ export default function ChessGame() {
 
   const getStatusText = () => {
     if (gameOverMsg) return gameOverMsg;
-    if (game.isCheckmate()) return "Checkmate!";
+    if (game.isCheckmate()) {
+      const winner = game.turn() === 'w' ? 'Black' : 'White';
+      return `Checkmate! ${winner} wins.`;
+    }
     if (game.isDraw()) return "Draw";
     if (role === 'Spectator') return `${game.turn() === 'w' ? 'White' : 'Black'}'s Turn`;
     
     const isMyTurn = (role === 'White' && game.turn() === 'w') || (role === 'Black' && game.turn() === 'b');
     return isMyTurn ? "Your Turn" : "Opponent's Turn";
   };
+
+  const isGameOver = game.isGameOver() || !!gameOverMsg;
+  let endStatusText = "";
+  if (game.isCheckmate()) {
+    const winner = game.turn() === 'w' ? 'Black' : 'White';
+    endStatusText = `Checkmate! ${winner} wins.`;
+  } else if (game.isDraw() || game.isStalemate()) {
+    endStatusText = "Game ended in a draw.";
+  } else if (gameOverMsg) {
+    endStatusText = gameOverMsg;
+  }
 
   const myDisplayName = role === 'Spectator' ? `Spectator ${spectatorNumber}` : role;
 
@@ -421,7 +466,7 @@ export default function ChessGame() {
 
         {/* Board Container */}
         <div className="relative rounded shadow-2xl shadow-black border-4 border-[#1a1a1a]">
-          {showResignConfirm && (
+          {showResignConfirm && !isGameOver && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded">
               <div className="glass bg-slate-900/90 p-6 rounded-xl border border-slate-700 max-w-[80%] w-full mx-4 shadow-2xl flex flex-col items-center text-center">
                 <div className="text-4xl mb-3">🏳️</div>
@@ -444,6 +489,60 @@ export default function ChessGame() {
                     Yes, Resign
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Game Over Popup */}
+          {isGameOver && (
+            <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm rounded">
+              <div className="glass bg-slate-900/90 p-6 rounded-xl border border-slate-700 max-w-[85%] w-full mx-4 shadow-2xl flex flex-col items-center text-center">
+                <div className="text-5xl mb-4">🏆</div>
+                <h3 className="text-2xl font-bold text-white mb-2">Game Over</h3>
+                <p className="text-lg text-slate-300 mb-6">{endStatusText}</p>
+                
+                {(role === 'White' || role === 'Black') && (
+                  <div className="w-full flex flex-col gap-3">
+                    {restartOfferFrom ? (
+                      <>
+                        <p className="text-sm text-yellow-200">{restartOfferFrom} wants a rematch.</p>
+                        <div className="flex gap-2 w-full">
+                          <button 
+                            onClick={() => {
+                              wsRef.current?.send(JSON.stringify({ type: 'restartAccept' }));
+                            }}
+                            className="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 rounded-lg font-medium transition-colors"
+                          >
+                            Accept
+                          </button>
+                          <button 
+                            onClick={() => {
+                              wsRef.current?.send(JSON.stringify({ type: 'restartReject' }));
+                              setRestartOfferFrom(null);
+                            }}
+                            className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg font-medium transition-colors"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </>
+                    ) : waitingForRestart ? (
+                      <div className="py-2 bg-slate-800/50 rounded-lg border border-slate-700">
+                        <p className="text-sm text-slate-300">Waiting for opponent...</p>
+                      </div>
+                    ) : (
+                      <button 
+                        onClick={() => {
+                          wsRef.current?.send(JSON.stringify({ type: 'restartOffer' }));
+                          setWaitingForRestart(true);
+                        }}
+                        className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold transition-colors shadow-lg shadow-blue-900/20"
+                      >
+                        🔄 Offer Rematch
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
